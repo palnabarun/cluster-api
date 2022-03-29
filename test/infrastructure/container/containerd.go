@@ -23,6 +23,8 @@ import (
 	"io"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/namespaces"
+	refdocker "github.com/containerd/containerd/reference/docker"
 )
 
 type containerdRuntime struct {
@@ -44,7 +46,28 @@ func (c *containerdRuntime) SaveContainerImage(ctx context.Context, image, dest 
 }
 
 func (c *containerdRuntime) PullContainerImageIfNotExists(ctx context.Context, image string) error {
-	return fmt.Errorf("not implemented")
+	ctx = namespaces.WithNamespace(ctx, c.namespace)
+
+	ref, err := refdocker.ParseDockerRef(image)
+	if err != nil {
+		return fmt.Errorf("failed to parse image reference: %v", err)
+	}
+
+	images, err := c.client.ListImages(ctx, fmt.Sprintf("name==%s", ref.String()))
+	if err != nil {
+		return fmt.Errorf("error listing images: %v", err)
+	}
+
+	// image already exists
+	if len(images) > 0 {
+		return nil
+	}
+
+	if _, err := c.client.Pull(ctx, image); err != nil {
+		return fmt.Errorf("error pulling image: %v", err)
+	}
+
+	return nil
 }
 
 func (c *containerdRuntime) GetHostPort(ctx context.Context, containerName, portAndProtocol string) (string, error) {
