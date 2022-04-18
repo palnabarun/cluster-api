@@ -19,12 +19,18 @@ package container
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/namespaces"
 	refdocker "github.com/containerd/containerd/reference/docker"
+	gocni "github.com/containerd/go-cni"
+	"github.com/containerd/nerdctl/pkg/labels"
 )
 
 type containerdRuntime struct {
@@ -70,8 +76,117 @@ func (c *containerdRuntime) PullContainerImageIfNotExists(ctx context.Context, i
 	return nil
 }
 
+type Found struct {
+	Container  containerd.Container
+	Req        string // The raw request string. name, short ID, or long ID.
+	MatchIndex int    // Begins with 0, up to MatchCount - 1.
+	MatchCount int    // 1 on exact match. > 1 on ambiguous match. Never be <= 0.
+}
+
+type OnFound func(ctx context.Context, found Found) (string, error)
+
+type ContainerWalker struct {
+	Client  *containerd.Client
+	OnFound OnFound
+}
+
+// Walk walks containers and calls w.OnFound .
+// Req is name, short ID, or long ID.
+// Returns the number of the found entries.
+func (w *ContainerWalker) Walk(ctx context.Context, req string) (int, string, error) {
+	if strings.HasPrefix(req, "k8s://") {
+		return -1, "", fmt.Errorf("specifying \"k8s://...\" form is not supported (Hint: specify ID instead): %q", req)
+	}
+	filters := []string{
+		fmt.Sprintf("labels.%q==%s", labels.Name, req),
+		fmt.Sprintf("id~=^%s.*$", regexp.QuoteMeta(req)),
+	}
+
+	containers, err := w.Client.Containers(ctx, filters...)
+	if err != nil {
+		return -1, "", err
+	}
+
+	matchCount := len(containers)
+	for i, c := range containers {
+		f := Found{
+			Container:  c,
+			Req:        req,
+			MatchIndex: i,
+			MatchCount: matchCount,
+		}
+		p, e := w.OnFound(ctx, f)
+		if e != nil {
+			return -1, "", e
+		} else {
+			return 1, p, nil
+		}
+	}
+	return matchCount, "", nil
+}
+
 func (c *containerdRuntime) GetHostPort(ctx context.Context, containerName, portAndProtocol string) (string, error) {
-	return "", fmt.Errorf("not implemented")
+	argPort := -1
+	argProto := ""
+	portProto := portAndProtocol
+
+	if portProto != "" {
+		splitBySlash := strings.Split(portProto, "/")
+		var err error
+		argPort, err = strconv.Atoi(splitBySlash[0])
+		if err != nil {
+			return "", err
+		}
+		if argPort <= 0 {
+			return "", fmt.Errorf("unexpected port %d", argPort)
+		}
+		switch len(splitBySlash) {
+		case 1:
+			argProto = "tcp"
+		case 2:
+			argProto = strings.ToLower(splitBySlash[1])
+		default:
+			return "", fmt.Errorf("failed to parse %q", portProto)
+		}
+	}
+	walker := ContainerWalker{
+		Client: c.client,
+		OnFound: func(ctx context.Context, found Found) (string, error) {
+			if found.MatchCount > 1 {
+				return "", fmt.Errorf("ambiguous ID %q", found.Req)
+			}
+			return printPort(ctx, found.Req, found.Container, argPort, argProto)
+		},
+	}
+	n, port, err := walker.Walk(ctx, containerName)
+	if err != nil {
+		return "", err
+	} else if n == 0 {
+		return "", fmt.Errorf("no such container %s", containerName)
+	}
+	return port, nil
+}
+
+func printPort(ctx context.Context, containerName string, container containerd.Container, argPort int, argProto string) (string, error) {
+	l, err := container.Labels(ctx)
+	if err != nil {
+		return "", err
+	}
+	portsJSON := l[labels.Ports]
+	if portsJSON == "" {
+		return "", nil
+	}
+	var ports []gocni.PortMapping
+	if err := json.Unmarshal([]byte(portsJSON), &ports); err != nil {
+		return "", err
+	}
+	// Loop through the ports and return the first HostPort.
+	for _, p := range ports {
+		if p.ContainerPort == int32(argPort) && strings.ToLower(p.Protocol) == argProto {
+			return strconv.Itoa(int(p.HostPort)), nil
+		}
+	}
+	return "", fmt.Errorf("no host port found for load balancer %q", containerName)
 }
 
 func (c *containerdRuntime) GetContainerIPs(ctx context.Context, containerName string) (string, string, error) {
