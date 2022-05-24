@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -30,6 +29,7 @@ import (
 	"github.com/containerd/containerd/namespaces"
 	refdocker "github.com/containerd/containerd/reference/docker"
 	gocni "github.com/containerd/go-cni"
+	"github.com/containerd/nerdctl/pkg/idutil/containerwalker"
 	"github.com/containerd/nerdctl/pkg/labels"
 )
 
@@ -76,63 +76,63 @@ func (c *containerdRuntime) PullContainerImageIfNotExists(ctx context.Context, i
 	return nil
 }
 
-type Found struct {
-	Container  containerd.Container
-	Req        string // The raw request string. name, short ID, or long ID.
-	MatchIndex int    // Begins with 0, up to MatchCount - 1.
-	MatchCount int    // 1 on exact match. > 1 on ambiguous match. Never be <= 0.
-}
+// type Found struct {
+// 	Container  containerd.Container
+// 	Req        string // The raw request string. name, short ID, or long ID.
+// 	MatchIndex int    // Begins with 0, up to MatchCount - 1.
+// 	MatchCount int    // 1 on exact match. > 1 on ambiguous match. Never be <= 0.
+// }
 
-type OnFound func(ctx context.Context, found Found) (string, error)
+// type OnFound func(ctx context.Context, found Found) error
 
-type ContainerWalker struct {
-	Client  *containerd.Client
-	OnFound OnFound
-}
+// type ContainerWalker struct {
+// 	Client  *containerd.Client
+// 	OnFound OnFound
+// }
 
 // Walk walks containers and calls w.OnFound .
 // Req is name, short ID, or long ID.
 // Returns the number of the found entries.
-func (w *ContainerWalker) Walk(ctx context.Context, req string) (int, string, error) {
-	if strings.HasPrefix(req, "k8s://") {
-		return -1, "", fmt.Errorf("specifying \"k8s://...\" form is not supported (Hint: specify ID instead): %q", req)
-	}
-	filters := []string{
-		fmt.Sprintf("labels.%q==%s", labels.Name, req),
-		fmt.Sprintf("id~=^%s.*$", regexp.QuoteMeta(req)),
-	}
+// func (w *ContainerWalker) Walk(ctx context.Context, req string) (int, error) {
+// 	if strings.HasPrefix(req, "k8s://") {
+// 		return -1, fmt.Errorf("specifying \"k8s://...\" form is not supported (Hint: specify ID instead): %q", req)
+// 	}
+// 	filters := []string{
+// 		fmt.Sprintf("labels.%q==%s", labels.Name, req),
+// 		fmt.Sprintf("id~=^%s.*$", regexp.QuoteMeta(req)),
+// 	}
 
-	containers, err := w.Client.Containers(ctx, filters...)
-	if err != nil {
-		return -1, "", err
-	}
+// 	containers, err := w.Client.Containers(ctx, filters...)
+// 	if err != nil {
+// 		return -1, err
+// 	}
 
-	matchCount := len(containers)
-	for i, c := range containers {
-		f := Found{
-			Container:  c,
-			Req:        req,
-			MatchIndex: i,
-			MatchCount: matchCount,
-		}
-		p, e := w.OnFound(ctx, f)
-		if e != nil {
-			return -1, "", e
-		} else {
-			return 1, p, nil
-		}
-	}
-	return matchCount, "", nil
-}
+// 	matchCount := len(containers)
+// 	for i, c := range containers {
+// 		f := Found{
+// 			Container:  c,
+// 			Req:        req,
+// 			MatchIndex: i,
+// 			MatchCount: matchCount,
+// 		}
+// 		e := w.OnFound(ctx, f)
+// 		if e != nil {
+// 			return -1, e
+// 		} else {
+// 			return 1, nil
+// 		}
+// 	}
+// 	return matchCount, nil
+// }
 
 func (c *containerdRuntime) GetHostPort(ctx context.Context, containerName, portAndProtocol string) (string, error) {
 	argPort := -1
 	argProto := ""
 	portProto := portAndProtocol
+	var err error
 
 	if portProto != "" {
 		splitBySlash := strings.Split(portProto, "/")
-		var err error
 		argPort, err = strconv.Atoi(splitBySlash[0])
 		if err != nil {
 			return "", err
@@ -149,16 +149,23 @@ func (c *containerdRuntime) GetHostPort(ctx context.Context, containerName, port
 			return "", fmt.Errorf("failed to parse %q", portProto)
 		}
 	}
-	walker := ContainerWalker{
+
+	var port string
+	walker := containerwalker.ContainerWalker{
 		Client: c.client,
-		OnFound: func(ctx context.Context, found Found) (string, error) {
+		OnFound: func(ctx context.Context, found containerwalker.Found) error {
 			if found.MatchCount > 1 {
-				return "", fmt.Errorf("ambiguous ID %q", found.Req)
+				return fmt.Errorf("ambiguous ID %q", found.Req)
 			}
-			return printPort(ctx, found.Req, found.Container, argPort, argProto)
+			port, err = printPort(ctx, found.Req, found.Container, argPort, argProto)
+			if err != nil {
+				return err
+			}
+			return nil
 		},
 	}
-	n, port, err := walker.Walk(ctx, containerName)
+
+	n, err := walker.Walk(ctx, containerName)
 	if err != nil {
 		return "", err
 	} else if n == 0 {
