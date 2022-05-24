@@ -151,7 +151,7 @@ func (c *containerdRuntime) GetHostPort(ctx context.Context, containerName, port
 	}
 
 	var port string
-	walker := containerwalker.ContainerWalker{
+	walker := &containerwalker.ContainerWalker{
 		Client: c.client,
 		OnFound: func(ctx context.Context, found containerwalker.Found) error {
 			if found.MatchCount > 1 {
