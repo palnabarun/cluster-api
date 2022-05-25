@@ -37,6 +37,7 @@ require (
 	github.com/containerd/imgcrypt v1.1.5-0.20220421044638-8ba028dca028 // indirect
 	github.com/containerd/stargz-snapshotter v0.11.4 // indirect
 	github.com/containernetworking/cni v1.1.0 // indirect
+	github.com/containernetworking/plugins v1.1.1 // indirect
 	github.com/containers/ocicrypt v1.1.3 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.1 // indirect
 	github.com/docker/docker-credential-helpers v0.6.4 // indirect
@@ -169,7 +170,6 @@ require (
 	google.golang.org/genproto v0.0.0-20220426171045-31bebdecfb46 // indirect
 	google.golang.org/grpc v1.46.0 // indirect
 	google.golang.org/protobuf v1.28.0 // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.66.2 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
