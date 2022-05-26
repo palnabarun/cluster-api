@@ -173,13 +173,13 @@ func (c *containerdRuntime) GetContainerIPs(ctx context.Context, containerName s
 		return "", "", fmt.Errorf("no such object %s", containerName)
 	}
 
-	format := "{{range.NetworkSettings.Networks}}{{.GlobalIPv6Address}}{{end}}"
+	format := "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
 	ip, err := formatSlice(f.entries, format)
 	if err != nil {
 		return "", "", err
 	}
 
-	format = "{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}"
+	format = "{{range.NetworkSettings.Networks}}{{.GlobalIPv6Address}}{{end}}"
 	ipv6, err := formatSlice(f.entries, format)
 	if err != nil {
 		return "", "", err
